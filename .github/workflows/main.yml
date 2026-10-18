@@ -1,0 +1,115 @@
+
+name: Compilar AtlasFit desde ZIP
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Generar APK Android
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Descargar repositorio
+        uses: actions/checkout@v4
+
+      - name: Buscar y descomprimir ZIP
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ZIP=$(find . -maxdepth 3 -type f \
+            -name "AtlasFit_Personal_Completo_GitHub.zip" \
+            -print -quit)
+
+          if [ -z "$ZIP" ]; then
+            echo "ERROR: No se encontro el ZIP AtlasFit"
+            exit 1
+          fi
+
+          mkdir -p "$RUNNER_TEMP/atlasfit"
+          unzip -q "$ZIP" -d "$RUNNER_TEMP/atlasfit"
+
+          PROJECT="$RUNNER_TEMP/atlasfit/AtlasFit"
+
+          test -f "$PROJECT/settings.gradle"
+          test -f "$PROJECT/app/build.gradle"
+
+          echo "PROJECT_DIR=$PROJECT" >> "$GITHUB_ENV"
+          echo "Proyecto descomprimido correctamente"
+
+      - name: Configurar Java 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Instalar Gradle 8.9
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Comprobar entorno
+        shell: bash
+        run: |
+          set -e
+          java -version
+          gradle --version
+
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          test -d "$ANDROID_HOME"
+
+          test -d "$ANDROID_HOME/platforms/android-35" \
+            || echo "Android 35 aun no instalado"
+
+      - name: Preparar SDK Android
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SDKMANAGER=$(find "$ANDROID_HOME/cmdline-tools" \
+            -type f -name sdkmanager -print -quit)
+
+          if [ -z "$SDKMANAGER" ]; then
+            echo "ERROR: sdkmanager no disponible"
+            exit 1
+          fi
+
+          yes | "$SDKMANAGER" --licenses \
+            >/dev/null || true
+
+          "$SDKMANAGER" --install \
+            "platforms;android-35" \
+            "build-tools;35.0.0"
+
+      - name: Compilar AtlasFit
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$PROJECT_DIR"
+
+          gradle :app:assembleDebug \
+            --no-daemon \
+            --stacktrace
+
+      - name: Verificar APK
+        shell: bash
+        run: |
+          set -e
+          APK="$PROJECT_DIR/app/build/outputs/apk/debug/app-debug.apk"
+
+          test -s "$APK"
+          ls -lh "$APK"
+
+      - name: Publicar APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: AtlasFit-APK
+          path: ${{ env.PROJECT_DIR }}/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 30
